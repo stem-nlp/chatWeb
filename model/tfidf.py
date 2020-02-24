@@ -1,9 +1,11 @@
 import xlrd
 import numpy as np
 from QA import QA, cut_words
+from model.Spider import Spider
 from sklearn.cluster import KMeans
 from sklearn.externals import joblib
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
 import os, sys
@@ -83,29 +85,44 @@ class Robot():
                 self.categories = pickle.load(f)
 
     def ask(self, question):
+        answer = ""
         # 预测
         qa = QA(None, question ,"")
         feature = self.tfidf.get_feature(qa)
         # 查询语句所属类别
         c = self.cluster_pred(feature, self.cls)
 
-        # 取出该类别的所有问答对的id
-        find_items = np.where(self.categories == c)
-        if len(find_items[0]) == 0:
-            return False
-        # 获取特征向量
-        find_feature = self.feature_matrix[find_items[0]]
+        # 类别为-1，表示问题与聚类簇距离过大，应使用其他方法
+        if c != -1:
+            # 取出该类别的所有问答对的id
+            find_items = np.where(self.categories == c)
+            if len(find_items[0]) == 0:
+                return False
+            # 获取特征向量
+            find_feature = self.feature_matrix[find_items[0]]
 
-        # 计算各向量之间的余弦相似度
-        print("找到{}个候选问题，计算相似度...".format(len(find_feature)))
-        cs = cosine_similarity(feature, find_feature)
-        # 取查询句子相对其他句子的相似度，找出最相似句子对应答案
-        rank_list = cs[0]
-        max_qa_index = find_items[0][np.argmax(rank_list)]
-        max_qa = self.qa_list[max_qa_index]
+            # 计算各向量之间的余弦相似度
+            print("找到{}个候选问题，计算相似度...".format(len(find_feature)))
+            cs = cosine_similarity(feature, find_feature)
+            # 取查询句子相对其他句子的相似度，找出最相似句子对应答案
+            rank_list = cs[0]
+            max_qa_index = find_items[0][np.argmax(rank_list)]
+            max_qa = self.qa_list[max_qa_index]
 
-        print("匹配问题：{}\n对应回答：{}".format(max_qa.question, max_qa.answer))
-        return max_qa.answer
+            print("匹配问题：{}\n对应回答：{}".format(max_qa.question, max_qa.answer))
+            answer = max_qa.answer
+        else:
+            # 爬虫
+            sp = Spider(question)
+            sp_res = sp.get_answer()
+
+            # 爬虫返回空串，则尝试使用生成模型
+            if sp_res == "":
+                # 生成模型
+                pass
+            else:
+                answer = sp_res
+        return answer
 
     def cluster_train(self, feature_matrix):
         '''
@@ -115,9 +132,18 @@ class Robot():
         cluster_.fit(feature_matrix)
         return cluster_
 
-    def cluster_pred(self, x, cluster_):
+    def cluster_pred(self, x, cluster_, thresh=0.5):
+        '''
+        判断x所属聚类的类别，若x距离该类别距离大于阈值thresh, 则返回-1
+        :param x:
+        :param cluster_:
+        :return:
+        '''
         c = cluster_.predict(x)
-        return c
+        center = cluster_.cluster_centers_[c]
+        distance = euclidean_distances(center, x)
+        print("最近欧拉距离：{}".format(distance))
+        return c if distance[0][0] < thresh else -1
 
 if __name__ == '__main__':
     r = Robot()
