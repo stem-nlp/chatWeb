@@ -2,24 +2,28 @@ import xlrd
 import numpy as np
 from QA import QA, cut_words
 from model.Spider import Spider
+from model.Bert import Bert
+from model.Tfidf import TFIDF
 from sklearn.cluster import KMeans
 from sklearn.externals import joblib
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import euclidean_distances
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.feature_extraction.text import TfidfTransformer
+
 import os, sys
 import pickle
 
-xls_path = os.path.join( sys.path[0], "data/qa_corpus.xlsx")
-category_save_path = os.path.join( sys.path[0], "save/categories.pkl")
-cluster_save_path = os.path.join( sys.path[0], "save/cluster.m")
+xls_path = os.path.join(os.path.dirname(__file__), "../data/qa_corpus.xlsx")
+category_save_path = os.path.join(os.path.dirname(__file__), "../save/categories.pkl")
+cluster_save_path = os.path.join(os.path.dirname(__file__), "../save/cluster.m")
+feature_save_path = os.path.join(os.path.dirname(__file__), "../save/feature.npy")
+cluster_csv_save_path = os.path.join(os.path.dirname(__file__), "../save/cluster_output.csv")
+
 
 def read_data():
     workbook = xlrd.open_workbook(xls_path)
     sheet = workbook.sheet_by_index(0)
 
-    qa_list = [] # 包含所有“问题-答案”对象的列表
+    qa_list = []  # 包含所有“问题-答案”对象的列表
     for i in range(2, sheet.nrows):
         qid = sheet.cell(i, 0).value
         question = str(sheet.cell(i, 1).value)
@@ -27,70 +31,60 @@ def read_data():
         qa_list.append(QA(qid, question, answer))
     return qa_list
 
-class TFIDF:
-    def __init__(self):
-        pass
-
-    def word_feature(self, qa_list: [QA]):
-        """对语料库构建tf-idf特征"""
-        corpus = []
-        for i in qa_list:
-            corpus.append(" ".join(i.question_words))
-
-        self.vectorizer = CountVectorizer(min_df=1, max_df=1.0, token_pattern='\\b\\w+\\b')
-        self.vectorizer.fit(corpus)
-        X = self.vectorizer.transform(corpus)
-
-        self.tf_idf_transformer = TfidfTransformer()
-        self.tf_idf_transformer.fit(X)
-        tf_idf = self.tf_idf_transformer.transform(X)
-
-        print(tf_idf.shape)
-        return tf_idf.toarray()
-
-    def get_feature(self, qa):
-        """对待回答问题构建tf-idf特征"""
-        text = [" ".join(qa.question_words)]
-        X = self.vectorizer.transform(text)
-        tf_idf = self.tf_idf_transformer.transform(X)
-        return tf_idf.toarray()
-
-
 
 class Robot():
     def __init__(self):
+        # 是否重新训练聚类器
+        retrain = False
         # 获取训练数据，构造特征，获得特征矩阵
         self.qa_list = read_data()
-        self.tfidf = TFIDF()
-        self.feature_matrix = self.tfidf.word_feature(self.qa_list)
 
-        # 训练聚类器
-        self.cls = None
-        if not os.path.exists(cluster_save_path):
-            print("找不到分类器，重新训练")
-            self.cls = self.cluster_train(self.feature_matrix)
-            joblib.dump(self.cls, cluster_save_path)
+        # 选择特征提取方法：TFIDF Bert
+        self.feature_extractor_name = "BERT"
+        if self.feature_extractor_name == "TFIDF":
+            self.feature_extractor =  TFIDF()
+        elif self.feature_extractor_name == "BERT":
+            self.feature_extractor = Bert()
+
+        # 提取语料库特征
+        self.feature_matrix = None
+        if not os.path.exists(feature_save_path) or self.feature_extractor_name == "TFIDF" or retrain:
+            print("提取语料库特征")
+            self.feature_matrix = self.feature_extractor.word_feature(self.qa_list)
+            if self.feature_extractor_name != "TFIDF":
+                np.save(feature_save_path, self.feature_matrix)
         else:
-            self.cls = joblib.load(cluster_save_path)
+            self.feature_matrix = np.load(feature_save_path)
 
-        # 获取聚类结果
+
+        # 训练聚类器, 聚类结果
         self.categories = None
-        if not os.path.exists(category_save_path):
-            print("找不到已聚类结果，重新聚类")
-            self.categories = self.cluster_pred(self.feature_matrix, self.cls)
+        self.cls = None
+        if not os.path.exists(cluster_save_path) or not os.path.exists(category_save_path) or retrain:
+            print("训练聚类器，获得语料库聚类结果")
+            self.categories, self.cls = self.cluster_train(self.feature_matrix)
+
+            # 保存
             with open(category_save_path, 'wb') as f:
                 pickle.dump(self.categories, f)
+            joblib.dump(self.cls, cluster_save_path)
+
+            # 查看类别
+            with open(cluster_csv_save_path, 'w', encoding='utf8') as f:
+                for idx, q in enumerate(self.qa_list):
+                    f.write(q.question + ',' + str(self.categories[idx]) + '\n')
         else:
             with open(category_save_path, 'rb') as f:
                 self.categories = pickle.load(f)
+            self.cls = joblib.load(cluster_save_path)
 
     def ask(self, question):
         answer = ""
         # 预测
-        qa = QA(None, question ,"")
-        feature = self.tfidf.get_feature(qa)
+        qa = QA(None, question, "")
+        feature = self.feature_extractor.get_feature(qa)
         # 查询语句所属类别
-        c = self.cluster_pred(feature, self.cls)
+        c = self.cluster_pred(feature, self.cls, thresh=0.8)
 
         # 类别为-1，表示问题与聚类簇距离过大，应使用其他方法
         if c != -1:
@@ -128,9 +122,10 @@ class Robot():
         '''
         聚类
         '''
-        cluster_ = KMeans(n_clusters=8, random_state=9)
-        cluster_.fit(feature_matrix)
-        return cluster_
+        cluster_ = KMeans(n_clusters=12, random_state=9)
+        category = cluster_.fit_predict(feature_matrix)
+        print(category.shape)
+        return category, cluster_
 
     def cluster_pred(self, x, cluster_, thresh=0.5):
         '''
@@ -142,8 +137,9 @@ class Robot():
         c = cluster_.predict(x)
         center = cluster_.cluster_centers_[c]
         distance = euclidean_distances(center, x)
-        print("最近欧拉距离：{}".format(distance))
+        print("最近类别：{}，最近欧拉距离：{}".format(c, distance))
         return c if distance[0][0] < thresh else -1
+
 
 if __name__ == '__main__':
     r = Robot()
