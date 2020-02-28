@@ -4,10 +4,12 @@ from QA import QA, cut_words
 from model.Spider import Spider
 from model.Bert import Bert
 from model.Tfidf import TFIDF
+from model.BoolSearch import BoolSearch
 from sklearn.cluster import KMeans
 from sklearn.externals import joblib
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import euclidean_distances
+from config import *
 
 import os, sys
 import pickle
@@ -37,7 +39,12 @@ class Robot():
         # 是否重新训练聚类器
         retrain = False
         # 获取训练数据，构造特征，获得特征矩阵
+        print("读取语料数据")
         self.qa_list = read_data()
+
+        # 加载布尔搜索
+        print("构建布尔搜索索引")
+        self.bool_search = BoolSearch(self.qa_list)
 
         # 选择特征提取方法：TFIDF Bert
         self.feature_extractor_name = "BERT"
@@ -84,24 +91,46 @@ class Robot():
         qa = QA(None, question, "")
         feature = self.feature_extractor.get_feature(qa)
         # 查询语句所属类别
-        c = self.cluster_pred(feature, self.cls, thresh=0.8)
+        c = self.cluster_pred(feature, self.cls, thresh=SPIDER_THRESHOLD)
 
         # 类别为-1，表示问题与聚类簇距离过大，应使用其他方法
         if c != -1:
             # 取出该类别的所有问答对的id
-            find_items = np.where(self.categories == c)
-            if len(find_items[0]) == 0:
-                return False
+            find_items = np.where(self.categories == c)[0]
+            if len(find_items) == 0:
+                return ERROR_REPLY
             # 获取特征向量
-            find_feature = self.feature_matrix[find_items[0]]
+            find_feature = self.feature_matrix[find_items]
+            print("找到{}个候选问题，计算相似度...".format(len(find_feature)))
 
             # 计算各向量之间的余弦相似度
-            print("找到{}个候选问题，计算相似度...".format(len(find_feature)))
-            cs = cosine_similarity(feature, find_feature)
-            # 取查询句子相对其他句子的相似度，找出最相似句子对应答案
-            rank_list = cs[0]
-            max_qa_index = find_items[0][np.argmax(rank_list)]
-            max_qa = self.qa_list[max_qa_index]
+            rank_list = cosine_similarity(feature, find_feature)[0]
+            # 找出前top_k个最相似句子
+            top_k = 10
+            top_arg = np.argsort(rank_list)[::-1][:top_k]
+
+            # 基于特征的最相似问题topk结果：[[qa, 相似度], [qa, 相似度], [qa, 相似度]...]
+            feature_based_result = []
+            for i in top_arg:
+                feature_based_result.append([self.qa_list[find_items[i]], rank_list[i]])
+
+            # 获取布尔搜索topk结果
+            bs_based_result = self.bool_search.search(qa, top_k, scale=BOOL_SEARCH_SCALE)
+
+            # 结果合并，排序
+            total_result = feature_based_result + bs_based_result
+
+            if DEBUG:
+                for cnt, item in enumerate(total_result):
+                    total_result[cnt].append("特征" if cnt<top_k else "布尔搜索")
+
+            sorted(total_result, key=lambda x:x[1])
+
+            if DEBUG:
+                for cnt, (q, rate, type_) in enumerate(total_result):
+                    print(q.question, rate, type_)
+
+            max_qa = total_result[0][0]
 
             print("匹配问题：{}\n对应回答：{}".format(max_qa.question, max_qa.answer))
             answer = max_qa.answer
@@ -111,9 +140,9 @@ class Robot():
             sp_res = sp.get_answer()
 
             # 爬虫返回空串，则尝试使用生成模型
-            if sp_res == "":
+            if sp_res in ["", "defaultReply"]:
                 # 生成模型
-                pass
+                answer = UNKNOWN_REPLY
             else:
                 answer = sp_res
         return answer
