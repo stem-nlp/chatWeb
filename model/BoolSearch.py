@@ -49,6 +49,7 @@ if __name__ == '__main__':
         return qa_list
     qa_list = read_data()
     bs = BoolSearch(qa_list)
-    qa_result = bs.search(QA("", "咨询一下如何存款", ""))
+    qa_test = QA("", "咨询一下如何存款", "")
+    qa_result = bs.search(qa_test)
     for qa in qa_result:
-        print("{}:{}".format(qa.question, qa.answer))
+        print("{}:{},\n 匹配分值：{}".format(qa[0].question, qa[0].answer, qa[1]))

@@ -20,7 +20,7 @@ class TFIDF:
         self.tf_idf_transformer.fit(X)
         tf_idf = self.tf_idf_transformer.transform(X)
 
-        print(tf_idf.shape)
+        print("tf_idf形状：",tf_idf.shape)
         return tf_idf.toarray()
 
     def get_feature(self, qa):
