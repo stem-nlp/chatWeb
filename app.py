@@ -2,10 +2,12 @@ from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import cross_origin
 import json
 
-from model import Robot
+# from model import Robot
+from model import Robot_new
 app = Flask(__name__, static_folder='dist', template_folder="dist", static_url_path='')
 
-robot = Robot.Robot()
+# robot = Robot.Robot()
+robot = Robot_new.Robot()
 @app.route("/", methods=["GET"])
 def main():
     return render_template("index.html")

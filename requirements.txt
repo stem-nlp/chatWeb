@@ -7,3 +7,6 @@ xlrd
 sklearn
 pickle
 werobot
+transformers
+torch
+time

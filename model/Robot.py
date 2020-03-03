@@ -47,7 +47,7 @@ class Robot():
         self.bool_search = BoolSearch(self.qa_list)
 
         # 选择特征提取方法：TFIDF Bert
-        self.feature_extractor_name = "BERT"
+        self.feature_extractor_name = "TFIDF"
         if self.feature_extractor_name == "TFIDF":
             self.feature_extractor =  TFIDF()
         elif self.feature_extractor_name == "BERT":
@@ -103,37 +103,53 @@ class Robot():
             find_feature = self.feature_matrix[find_items]
             print("找到{}个候选问题，计算相似度...".format(len(find_feature)))
 
-            # 计算各向量之间的余弦相似度
-            rank_list = cosine_similarity(feature, find_feature)[0]
-            # 找出前top_k个最相似句子
-            top_k = 10
-            top_arg = np.argsort(rank_list)[::-1][:top_k]
-
-            # 基于特征的最相似问题topk结果：[[qa, 相似度], [qa, 相似度], [qa, 相似度]...]
-            feature_based_result = []
-            for i in top_arg:
-                feature_based_result.append([self.qa_list[find_items[i]], rank_list[i]])
+            # # 计算各向量之间的余弦相似度
+            # rank_list = cosine_similarity(feature, find_feature)[0]
+            # # 找出前top_k个最相似句子
+            # top_k = 10
+            # top_arg = np.argsort(rank_list)[::-1][:top_k]
+            #
+            # # 基于特征的最相似问题topk结果：[[qa, 相似度], [qa, 相似度], [qa, 相似度]...]
+            # feature_based_result = []
+            # for i in top_arg:
+            #     feature_based_result.append([self.qa_list[find_items[i]], rank_list[i]])
 
             # 获取布尔搜索topk结果
+            top_k = 10
             bs_based_result = self.bool_search.search(qa, top_k, scale=BOOL_SEARCH_SCALE)
 
-            # 结果合并，排序
-            total_result = feature_based_result + bs_based_result
+            # # 结果合并，排序
+            # total_result = feature_based_result + bs_based_result
 
-            if DEBUG:
-                for cnt, item in enumerate(total_result):
-                    total_result[cnt].append("特征" if cnt<top_k else "布尔搜索")
+            total_result =  bs_based_result
+            if len(total_result) > 0:
+                if DEBUG:
+                    for cnt, item in enumerate(total_result):
+                        total_result[cnt].append("特征" if cnt < top_k else "布尔搜索")
 
-            sorted(total_result, key=lambda x:x[1])
+                sorted(total_result, key=lambda x: x[1])
 
-            if DEBUG:
-                for cnt, (q, rate, type_) in enumerate(total_result):
-                    print(q.question, rate, type_)
+                if DEBUG:
+                    for cnt, (q, rate, type_) in enumerate(total_result):
+                        print(q.question, rate, type_)
 
-            max_qa = total_result[0][0]
+                max_qa = total_result[0][0]
 
-            print("匹配问题：{}\n对应回答：{}".format(max_qa.question, max_qa.answer))
-            answer = max_qa.answer
+                print("匹配问题：{}\n对应回答：{}".format(max_qa.question, max_qa.answer))
+                answer = max_qa.answer
+            else:
+                # 爬虫
+                sp = Spider(question)
+                sp_res = sp.get_answer()
+
+                # 爬虫返回空串，则尝试使用生成模型
+                if sp_res in ["", "defaultReply"]:
+                    # 生成模型
+                    answer = UNKNOWN_REPLY
+                else:
+                    answer = sp_res
+
+
         else:
             # 爬虫
             sp = Spider(question)
@@ -153,7 +169,7 @@ class Robot():
         '''
         cluster_ = KMeans(n_clusters=12, random_state=9)
         category = cluster_.fit_predict(feature_matrix)
-        print(category.shape)
+        print("类别数：",category.shape)
         return category, cluster_
 
     def cluster_pred(self, x, cluster_, thresh=0.5):
