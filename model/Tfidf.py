@@ -11,6 +11,7 @@ class TFIDF:
         corpus = []
         for i in qa_list:
             corpus.append(" ".join(i.question_words))
+           # corpus.append(" ".join(i.question_words_nostop))
 
         self.vectorizer = CountVectorizer(min_df=1, max_df=1.0, token_pattern='\\b\\w+\\b')
         self.vectorizer.fit(corpus)
@@ -26,6 +27,7 @@ class TFIDF:
     def get_feature(self, qa):
         """对待回答问题构建tf-idf特征"""
         text = [" ".join(qa.question_words)]
+       # text = [" ".join(qa.question_words_nostop)]
         X = self.vectorizer.transform(text)
         tf_idf = self.tf_idf_transformer.transform(X)
         return tf_idf.toarray()
